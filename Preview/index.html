@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#060d1b"><meta name="description" content="Experiência 3D interativa da topologia Cisco Packet Tracer com tráfego, ping, simulação de falhas e tour guiado.">
+<title>Cisco Network Lab — 3D VR (WebXR + Cardboard)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-shell">
+  <canvas id="scene" aria-label="Rede Cisco em 3D: gire e clique nos dispositivos"></canvas>
+  <canvas id="overlay" aria-hidden="true"></canvas>
+  <header class="topbar">
+    <div class="brand"><span class="brand-symbol"><span></span><span></span><span></span><span></span></span><div><b>NETWORK<span>LAB</span></b><small>EXPERIÊNCIA CISCO 3D</small></div></div>
+    <div class="top-center"><span class="live-light"></span><span>LABORATÓRIO ATIVO</span><span class="top-divider"></span><span id="statusTop">11 conexões monitoradas</span></div>
+    <div class="top-actions"><span class="vr-chip">VR READY</span><button id="helpBtn" class="icon-button" title="Atalhos e ajuda" aria-label="Ajuda">?</button><button id="fullscreenBtn" class="icon-button" title="Tela cheia" aria-label="Tela cheia">⛶</button></div>
+  </header>
+  <section class="hero">
+    <div class="eyebrow"><span class="eyebrow-line"></span> SIMULAÇÃO INTERATIVA <span class="version">V3.0 VR</span></div>
+    <h1>A REDE <em>GANHA VIDA.</em></h1>
+    <p>Explore os dispositivos, siga o caminho dos dados e provoque falhas para entender como tudo se conecta.</p>
+    <div class="hero-actions"><button class="primary-button" id="tourBtn"><span>▶</span> Iniciar apresentação</button><button class="ghost-button" id="overviewBtn">⌗ Visão geral</button></div>
+  </section>
+  <section class="vr-console" aria-label="Modos para óculos de realidade virtual">
+    <div class="vr-console-title"><span class="vr-dot"></span> APRESENTAÇÃO EM ÓCULOS 3D <span class="vr-mini">VERSÃO VR</span></div>
+    <div class="vr-console-actions"><button id="xrBtn" class="vr-button" title="Meta Quest e outros headsets WebXR">◉ Entrar no VR imersivo</button><button id="stereoBtn" class="vr-button vr-stereo" title="Google Cardboard e óculos que usam celular">◫ 3D lado a lado</button></div>
+    <div id="xrSupport" class="vr-status" role="status">Verificando suporte ao headset…</div>
+    <p>Quest / WebXR: abra por HTTPS no navegador do óculos. Cardboard: use a tela dividida com o celular.</p>
+  </section>
+  <div class="stereo-controls" aria-label="Controles do modo 3D lado a lado"><button id="exitStereoBtn" hidden>✕ Sair</button><button id="gyroBtn">◉ Usar movimento</button><button id="stereoResetBtn">◎ Centralizar</button><button id="stereoNextBtn">▶ Próxima etapa</button></div>
+  <aside class="side-panel" id="detailPanel">
+    <div class="side-head"><div class="section-mark">INSPECTOR <span>01 / 12</span></div><button class="close-button" id="closeDetail" title="Fechar">×</button></div>
+    <div class="device-emblem" id="deviceEmblem">◎</div>
+    <div class="device-category" id="deviceType">DISPOSITIVO SELECIONADO</div>
+    <h2 id="deviceName">ROTEADOR 1941</h2>
+    <div class="device-status"><i class="state-dot"></i><span id="deviceStatus">OPERACIONAL</span></div>
+    <p id="deviceDescription">Distribui o tráfego para a rede.</p>
+    <div class="spec-grid"><div><span>ENDEREÇO IP</span><b id="deviceIp">—</b></div><div><span>CONEXÕES</span><b id="deviceLinks">—</b></div></div>
+    <div class="port-title">CONEXÕES DO EQUIPAMENTO</div><div id="portList" class="port-list"></div>
+    <button class="inspect-button" id="focusBtn">◎ Focar câmera neste equipamento</button>
+  </aside>
+  <aside class="stats-panel" id="stats-panel">
+    <div class="section-mark">TELEMETRIA <span class="pulse-bars">▂▅▃▇</span></div>
+    <div class="stat-row"><span>Dispositivos</span><b id="devicesMetric">12 <small>/ 12</small></b></div>
+    <div class="stat-row"><span>Links ativos</span><b id="linksMetric">11 <small>/ 11</small></b></div>
+    <div class="stat-row"><span>Pacotes visuais</span><b id="packetsMetric">000</b></div>
+    <div class="stat-row"><span>Estado da rede</span><b class="healthy" id="healthMetric">ESTÁVEL</b></div>
+    <div class="spark" id="sparkline" aria-hidden="true"><i style="height:29%"></i><i style="height:57%"></i><i style="height:37%"></i><i style="height:83%"></i><i style="height:51%"></i><i style="height:95%"></i><i style="height:68%"></i><i style="height:80%"></i><i style="height:42%"></i><i style="height:70%"></i><i style="height:57%"></i><i style="height:90%"></i><i style="height:66%"></i><i style="height:85%"></i><i style="height:50%"></i><i style="height:98%"></i></div>
+    <div class="sim-note">Simulação educativa — sem tráfego real.</div>
+  </aside>
+  <section class="console-panel" aria-label="Controles da simulação">
+    <div class="console-header"><span class="console-header-icon">⟡</span><b>CONSOLE DE REDE</b><span id="consoleState" class="console-live">● AO VIVO</span></div>
+    <div class="console-main">
+      <div class="control-block"><label for="sourceSel">ORIGEM DO TESTE</label><select id="sourceSel"></select></div>
+      <div class="route-arrow">→</div>
+      <div class="control-block"><label for="targetSel">DESTINO</label><select id="targetSel"></select></div>
+      <button id="pingBtn" class="ping-button">↗ ENVIAR PING</button>
+      <div class="console-separator"></div>
+      <button class="toggle active" id="trafficBtn" aria-pressed="true" title="Pausar ou animar pacotes">⏸ <span>TRÁFEGO</span></button>
+      <button class="toggle" id="failureBtn" aria-pressed="false" title="Escolher uma ligação e desligá-la">⚡ <span>FALHAS</span></button>
+      <button class="toggle active" id="cameraBtn" aria-pressed="true" title="Rotação automática">◉ <span>CÂMERA</span></button>
+      <button class="toggle" id="resetBtn" title="Restaurar simulação">↺ <span>RESET</span></button>
+    </div>
+    <div class="console-footer"><div id="consoleMessage"><span class="prompt">›</span> Sistema iniciado. Clique num dispositivo para inspecionar ou envie um ping visual.</div><div class="speed-control"><label for="speedRange">VELOCIDADE</label><input id="speedRange" type="range" min="0.3" max="3" step="0.1" value="1.2"><output id="speedOutput">1.2×</output></div></div>
+  </section>
+  <div class="interaction-hint" id="interactionHint">↔ ARRASTE PARA GIRAR <span>·</span> ⊕ SCROLL PARA ZOOM <span>·</span> ◉ CLIQUE PARA EXPLORAR</div>
+  <div class="notification" id="notification" role="status" aria-live="polite"></div>
+  <div class="tour-popup" id="tourPopup" hidden><div class="tour-head"><span id="tourStep">ETAPA 1/6</span><button id="tourClose" aria-label="Fechar apresentação">×</button></div><h3 id="tourTitle"></h3><p id="tourText"></p><div class="tour-nav"><button id="tourBack">← ANTERIOR</button><button id="tourNext">PRÓXIMO →</button></div></div>
+  <div class="modal" id="helpModal" hidden><div class="modal-card"><button class="close-button" id="helpClose">×</button><div class="eyebrow">GUIA DE NAVEGAÇÃO</div><h2>Controle o laboratório</h2><p>Uma visualização educativa da rede mostrada no Cisco Packet Tracer. Agora com WebXR (headset) e 3D lado a lado (celular).</p><div class="help-grid"><b>Arrastar</b><span>Girar câmera</span><b>Roda do mouse</b><span>Aproximar / afastar</span><b>Clique</b><span>Selecionar dispositivo ou link no modo falhas</span><b>Espaço</b><span>Pausar / continuar pacotes</span><b>R</b><span>Restaurar rede e câmera</span><b>T</b><span>Iniciar tour</span><b>Esc</b><span>Fechar painéis e tour</span></div><p class="note">O ping é uma representação visual do percurso. O projeto não executa comandos ICMP, roteamento nem inspeção de pacotes reais.</p></div></div>
+  <div class="mobile-hint">TOQUE EM UM DISPOSITIVO • ARRASTE PARA GIRAR</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

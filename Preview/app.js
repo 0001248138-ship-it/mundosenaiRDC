@@ -1,0 +1,244 @@
+/* Cisco Network Lab PRO — WebGL 3D sem bibliotecas externas, funciona offline.
+   Simulação educativa: não envia ping ICMP nem intercepta dados reais. */
+(()=>{'use strict';
+const $=id=>document.getElementById(id),canvas=$('scene'),overlay=$('overlay'),ctx=overlay.getContext('2d');
+const color={blue:'#2d9fff',cyan:'#4cf2f0',red:'#ff637c',green:'#4ef1ae',purple:'#a68eff',white:'#d8f6ff',orange:'#ffc475'};
+const P=(x,y,z)=>[x,y,z], mix=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t), sub=(a,b)=>a.map((v,i)=>v-b[i]),add=(a,b)=>a.map((v,i)=>v+b[i]),scale=(a,k)=>a.map(v=>v*k),dot=(a,b)=>a.reduce((v,n,i)=>v+n*b[i],0), cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],len=a=>Math.hypot(...a),norm=a=>scale(a,1/(len(a)||1)),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const nodes=[
+{id:'Roteador 1941',type:'router',role:'ROTEAMENTO',description:'Distribui a conexão de internet e direciona o tráfego para o firewall. É o ponto de entrada da topologia.',ip:'Não indicado',p:P(0,0,4),c:color.blue,symbol:'⇄'},
+{id:'Firewall 5506-X',type:'firewall',role:'SEGURANÇA',description:'Controla, monitora e filtra o tráfego entre o roteador e as duas partes da rede.',ip:'Não indicado',p:P(0,0,1.65),c:color.red,symbol:'⬡'},
+{id:'Switch A',type:'switch',role:'DISTRIBUIÇÃO CABEADA',description:'Reúne o servidor e os dois computadores à esquerda, encaminhando quadros pela rede local.',ip:'Não indicado',p:P(-3.7,0,-.35),c:color.blue,symbol:'▤'},
+{id:'Switch B',type:'switch',role:'DISTRIBUIÇÃO CABEADA',description:'Conecta os dois computadores da direita e o ponto de acesso que atende aos visitantes.',ip:'Não indicado',p:P(3.7,0,-.35),c:color.blue,symbol:'▤'},
+{id:'Servidor',type:'server',role:'SERVIÇOS DA REDE',description:'Armazena, processa e disponibiliza dados, arquivos e serviços aos demais equipamentos. Gateway informado: 192.168.10.1.',ip:'192.168.10.2',p:P(-6.15,0,-2.2),c:color.purple,symbol:'▥'},
+{id:'PC 01',type:'pc',role:'COMPUTADOR · LAN',description:'Estação da rede cabeada, ligada à porta Fa0/2 do Switch A.',ip:'192.168.10.11',p:P(-4.55,0,-3.9),c:color.cyan,symbol:'▣'},
+{id:'PC 02',type:'pc',role:'COMPUTADOR · LAN',description:'Estação da rede cabeada, ligada à porta Fa0/3 do Switch A.',ip:'192.168.10.12',p:P(-2.7,0,-3.9),c:color.cyan,symbol:'▣'},
+{id:'PC 03',type:'pc',role:'COMPUTADOR · LAN',description:'Estação da rede cabeada, ligada à porta Fa0/2 do Switch B.',ip:'192.168.10.51',p:P(2.7,0,-3.9),c:color.green,symbol:'▣'},
+{id:'PC 04',type:'pc',role:'COMPUTADOR · LAN',description:'Estação da rede cabeada, ligada à porta Fa0/3 do Switch B.',ip:'192.168.10.52',p:P(4.55,0,-3.9),c:color.green,symbol:'▣'},
+{id:'Access Point',type:'ap',role:'REDE SEM FIO',description:'Amplia o alcance da conexão Wi-Fi e permite o acesso do notebook e do smartphone visitantes.',ip:'Não indicado',p:P(6.35,0,2.1),c:color.purple,symbol:'◉'},
+{id:'Laptop',type:'laptop',role:'VISITANTE · WI-FI',description:'Notebook conectado ao Access Point pela rede sem fio de visitantes.',ip:'Não indicado',p:P(5.2,0,4.05),c:color.cyan,symbol:'▣'},
+{id:'Smartphone',type:'phone',role:'VISITANTE · WI-FI',description:'Telefone conectado à rede Wi-Fi de visitantes por meio do Access Point.',ip:'Não indicado',p:P(7.3,0,4.05),c:color.green,symbol:'▯'}
+];
+const links=[
+{a:0,b:1,pa:'Gi0/1',pb:'Gi1/1'}, {a:1,b:2,pa:'Gi1/3',pb:'Fa0/23'}, {a:1,b:3,pa:'Gi1/2',pb:'Fa0/24'},
+{a:2,b:4,pa:'Fa0/4',pb:'—'}, {a:2,b:5,pa:'Fa0/2',pb:'—'}, {a:2,b:6,pa:'Fa0/3',pb:'—'},
+{a:3,b:7,pa:'Fa0/2',pb:'—'}, {a:3,b:8,pa:'Fa0/3',pb:'—'}, {a:3,b:9,pa:'Fa0/4',pb:'—'},
+{a:9,b:10,pa:'Wi-Fi',pb:'—',wireless:true}, {a:9,b:11,pa:'Wi-Fi',pb:'—',wireless:true}
+].map((l,i)=>({...l,id:i,up:true}));
+const state={yaw:.43,pitch:.72,dist:22,target:P(0,.1,.05),camFocus:null,auto:true,traffic:true,failMode:false,selected:1,hover:-1,hoverLink:-1,mouseDown:null,drag:false,speed:1.2,clock:0,packets:0,trail:[],ping:null,tour:-1,tourStart:0,labels:true,stereo:false,gyro:false,gyroOrigin:null,gyroSmooth:null,xrHover:-1,xrSession:null,xrRef:null,xrBase:null,xrLast:0,xrFollow:false,stereoHover:-1,stereoFocusAt:0,stereoLastSelected:-1};
+let w=0,h=0,dpr=1,camera,gl,glProg,glStatic,glDynamic,lastFrame=0,notifyTimeout,drawCount=0;
+function hex(h){const v=parseInt(h.slice(1),16);return[(v>>16&255)/255,(v>>8&255)/255,(v&255)/255]}
+function cameraMatrix(){const {yaw,pitch,dist,target}=state;const eye=add(target,[Math.sin(yaw)*Math.cos(pitch)*dist,Math.sin(pitch)*dist,Math.cos(yaw)*Math.cos(pitch)*dist]);const f=norm(sub(target,eye)),r=norm(cross(f,[0,1,0])),u=norm(cross(r,f));return {eye,f,r,u,aspect:w/h,zoom:1.45};}
+function project(p){if(!camera)return null;const rel=sub(p,camera.eye),z=dot(rel,camera.f);if(z<.15)return null;const f=h*.5*camera.zoom;return{x:w/2+dot(rel,camera.r)*f/z,y:h/2-dot(rel,camera.u)*f/z,z,scale:f/z};}
+function resize(){if(state.xrSession)return;dpr=Math.min(devicePixelRatio||1,2);w=canvas.clientWidth||innerWidth;h=canvas.clientHeight||innerHeight;canvas.width=Math.max(1,Math.round(w*dpr));canvas.height=Math.max(1,Math.round(h*dpr));overlay.width=canvas.width;overlay.height=canvas.height;ctx.setTransform(dpr,0,0,dpr,0,0);if(gl)gl.viewport(0,0,canvas.width,canvas.height)}
+// WebGL1 procedural meshes (all assets locally generated, no CDN or dependencies).
+function mesh(){return {v:[]}}
+function tri(m,a,b,c,col,em=0){const n=norm(cross(sub(b,a),sub(c,a))),rgb=hex(col);for(const p of[a,b,c])m.v.push(...p,...n,...rgb,em)}
+function quad(m,a,b,c,d,col,em=0){tri(m,a,b,c,col,em);tri(m,a,c,d,col,em)}
+function box(m,p,s,col,em=0){const [x,y,z]=p,[hx,hy,hz]=s.map(v=>v/2);const a=[P(x-hx,y-hy,z-hz),P(x+hx,y-hy,z-hz),P(x+hx,y+hy,z-hz),P(x-hx,y+hy,z-hz),P(x-hx,y-hy,z+hz),P(x+hx,y-hy,z+hz),P(x+hx,y+hy,z+hz),P(x-hx,y+hy,z+hz)];for(const [i,j,k,l] of [[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]])quad(m,a[i],a[j],a[k],a[l],col,em)}
+function cyl(m,p,r,height,col,seg=16,em=0){const y0=p[1]-height/2,y1=p[1]+height/2;for(let i=0;i<seg;i++){const t=i*Math.PI*2/seg,s=(i+1)*Math.PI*2/seg,a=P(p[0]+r*Math.cos(t),y0,p[2]+r*Math.sin(t)),b=P(p[0]+r*Math.cos(s),y0,p[2]+r*Math.sin(s)),c=P(b[0],y1,b[2]),d=P(a[0],y1,a[2]);quad(m,a,d,c,b,col,em);tri(m,P(p[0],y1,p[2]),c,d,col,em);tri(m,P(p[0],y0,p[2]),a,b,col,em)}}
+function ball(m,p,r,col,em=0){let lat=6,lon=10;for(let j=0;j<lat;j++){const t0=j*Math.PI/lat,t1=(j+1)*Math.PI/lat;for(let k=0;k<lon;k++){const v0=k*2*Math.PI/lon,v1=(k+1)*2*Math.PI/lon;const pt=(t,v)=>add(p,[r*Math.sin(t)*Math.cos(v),r*Math.cos(t),r*Math.sin(t)*Math.sin(v)]);quad(m,pt(t0,v0),pt(t0,v1),pt(t1,v1),pt(t1,v0),col,em)}}}
+function rod(m,a,b,r,col,em=0){const d=sub(b,a),n=norm(d);if(len(d)<.01)return;const ref=Math.abs(n[1])>.93?[1,0,0]:[0,1,0],u=norm(cross(n,ref)),v=norm(cross(n,u)),seg=7;for(let k=0;k<seg;k++){const t=k*2*Math.PI/seg,s=(k+1)*2*Math.PI/seg,off=q=>add(scale(u,Math.cos(q)*r),scale(v,Math.sin(q)*r)),p0=add(a,off(t)),p1=add(a,off(s)),p2=add(b,off(s)),p3=add(b,off(t));quad(m,p0,p3,p2,p1,col,em)}}
+function ring(m,p,r,col,em=0,vertical=false){const seg=40;for(let i=0;i<seg;i++){const t=i*2*Math.PI/seg,s=(i+1)*2*Math.PI/seg;const at=q=>vertical?add(p,[r*Math.cos(q),r*Math.sin(q),0]):add(p,[r*Math.cos(q),0,r*Math.sin(q)]);rod(m,at(t),at(s),.0125,col,em)}}
+function addDevice(m,n){const p=n.p,c=n.c,at=(x,y,z)=>add(p,[x,y,z]);
+  // pedestal
+  cyl(m,at(0,.055,0),.64,.11,'#14364c',20);cyl(m,at(0,.115,0),.48,.045,c,20,.3);cyl(m,at(0,.135,0),.42,.024,'#071628',20);
+  if(n.type==='router'){cyl(m,at(0,.55,0),.66,.40,'#115987',24);cyl(m,at(0,.77,0),.66,.045,'#4cbaff',24,.15);for(let i=0;i<4;i++){let a=i*Math.PI*.5+.3;rod(m,at(.10*Math.cos(a),.80,.10*Math.sin(a)),at(.42*Math.cos(a),.81,.42*Math.sin(a)),.027,color.white,.65);ball(m,at(.42*Math.cos(a),.81,.42*Math.sin(a)),.055,color.white,.85)}}
+  else if(n.type==='firewall'){box(m,at(0,.67,0),[1.45,1.03,.72],'#7d2b46');box(m,at(0,.64,-.37),[1.34,.87,.034],c,.15);for(let row=0;row<3;row++)for(let col=0;col<5;col++)box(m,at(-.50+col*.25+(row%2)*.07,.32+row*.24,-.392),[.18,.038,.015],'#42192e');box(m,at(0,1.19,0),[.95,.075,.50],color.orange,.5)}
+  else if(n.type==='switch'){box(m,at(0,.52,0),[1.55,.42,.83],'#0e507b');box(m,at(0,.72,0),[1.46,.045,.76],c,.2);for(let i=0;i<6;i++){box(m,at(-.56+i*.224,.51,-.43),[.14,.125,.035],'#081626');box(m,at(-.56+i*.224,.61,-.449),[.095,.016,.01],i%2?'#56ffc0':'#69d8ff',.9)}}
+  else if(n.type==='server'){box(m,at(0,.86,0),[.76,1.45,.72],'#3e326c');box(m,at(0,.86,-.37),[.62,1.29,.04],c,.1);for(let i=0;i<5;i++){box(m,at(0,.32+i*.25,-.401),[.49,.13,.024],'#0d2136');box(m,at(-.17,.32+i*.25,-.419),[.038,.038,.012],color.green,1.0)}}
+  else if(n.type==='ap'){box(m,at(0,.47,0),[.99,.24,.76],'#56467e');box(m,at(0,.61,0),[.90,.04,.67],c,.15);for(let x of[-.31,.31])rod(m,at(x,.50,.25),at(x,.50+(.69),.25),.037,c);ball(m,at(0,.63,-.24),.07,color.green,1)}
+  else if(n.type==='phone'){box(m,at(0,.79,0),[.37,.91,.12],'#1c5570');box(m,at(0,.79,-.075),[.29,.70,.018],c,.60);box(m,at(0,1.19,-.083),[.12,.014,.008],color.white,.8)}
+  else if(n.type==='laptop'){box(m,at(0,.79,.12),[.90,.61,.08],'#256989');box(m,at(0,.79,.069),[.76,.48,.016],c,.50);box(m,at(0,.40,-.19),[.94,.07,.59],'#2a7794');box(m,at(0,.444,-.21),[.65,.016,.22],'#0d334d')}
+  else{box(m,at(0,.81,0),[.86,.63,.13],'#1b5678');box(m,at(0,.81,-.078),[.72,.49,.015],c,.42);box(m,at(0,.38,0),[.105,.22,.12],'#27778b');box(m,at(0,.26,-.17),[.83,.05,.4],'#256e8c')}
+}
+function staticScene(){const m=mesh();box(m,P(0,-.27,0),[17.9,.30,12.5],'#0b2134');box(m,P(0,-.115,0),[17.3,.017,11.9],'#102b3e');
+for(let x=-8;x<=8;x++){rod(m,P(x,-.092,-5.85),P(x,-.092,5.85),.009,'#245168',.12)}for(let z=-5;z<=5;z++)rod(m,P(-8.5,-.092,z),P(8.5,-.092,z),.009,'#245168',.12);
+for(const n of nodes)addDevice(m,n);return m;}
+function linkPoint(n){return add(n.p,[0,.23,0]);}
+function addLink(m,l){const a=linkPoint(nodes[l.a]),b=linkPoint(nodes[l.b]),wire=l.wireless,up=l.up;const col=up?(wire?color.purple:color.blue):color.red;const height=wire?.37:.12;const start=add(a,[0,height,0]),end=add(b,[0,height,0]);if(wire){for(let i=0;i<14;i+=2){rod(m,mix(start,end,i/14),mix(start,end,(i+1)/14),.024,col,up?.22:.8)}}else rod(m,start,end,.033,col,up?.18:.6);for(const p of[start,end])ball(m,p,.066,col,.75)}
+function upload(m,buffer){const vertices=new Float32Array(m.v);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.DYNAMIC_DRAW);return vertices.length/10}
+function initWebGL(){gl=canvas.getContext('webgl',{alpha:true,antialias:true,xrCompatible:true,preserveDrawingBuffer:false})||canvas.getContext('experimental-webgl');if(!gl)return false;
+ const vs=`attribute vec3 a_pos;attribute vec3 a_normal;attribute vec3 a_rgb;attribute float a_em;uniform vec3 u_eye,u_right,u_up,u_forward;uniform float u_aspect,u_focal,u_xrActive;uniform mat4 u_xrVP;varying vec3 v_color;void main(){vec3 rel=a_pos-u_eye;float x=dot(rel,u_right),y=dot(rel,u_up),z=dot(rel,u_forward);gl_Position=u_xrActive>0.5?(u_xrVP*vec4(a_pos*0.17+vec3(0.0,1.0,-3.45),1.0)):vec4(x*u_focal/u_aspect,y*u_focal,(z-0.20)*1.002,z);float l=max(dot(normalize(a_normal),normalize(vec3(-.5,.95,-.7))),0.0);float shade=0.40+0.65*l;v_color=a_rgb*(shade+min(1.1,a_em)*.54);}`;
+ const fs=`precision mediump float;varying vec3 v_color;void main(){gl_FragColor=vec4(v_color,1.0);}`;
+ function shader(kind,code){let s=gl.createShader(kind);gl.shaderSource(s,code);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+ try{glProg=gl.createProgram();gl.attachShader(glProg,shader(gl.VERTEX_SHADER,vs));gl.attachShader(glProg,shader(gl.FRAGMENT_SHADER,fs));gl.linkProgram(glProg);if(!gl.getProgramParameter(glProg,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(glProg));}catch(e){console.error(e);return false}
+ glStatic=gl.createBuffer();glDynamic=gl.createBuffer();gl.useProgram(glProg);gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);/* double-sided procedural meshes */gl.clearColor(0,0,0,0);resize();const count=upload(staticScene(),glStatic);glStatic.count=count;return true;
+}
+function bindAndDraw(buf,count){gl.bindBuffer(gl.ARRAY_BUFFER,buf);const stride=40;for(let [name,size,offset]of[['a_pos',3,0],['a_normal',3,12],['a_rgb',3,24],['a_em',1,36]]){const loc=gl.getAttribLocation(glProg,name);gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,stride,offset)}gl.drawArrays(gl.TRIANGLES,0,count)}
+function render3d(xrView=null){gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(glProg);gl.uniform1f(gl.getUniformLocation(glProg,'u_xrActive'),xrView?1:0);if(xrView)gl.uniformMatrix4fv(gl.getUniformLocation(glProg,'u_xrVP'),false,xrView.vp);for(let [name,arr] of[['u_eye',camera.eye],['u_right',camera.r],['u_up',camera.u],['u_forward',camera.f]])gl.uniform3fv(gl.getUniformLocation(glProg,name),new Float32Array(arr));gl.uniform1f(gl.getUniformLocation(glProg,'u_aspect'),camera.aspect);gl.uniform1f(gl.getUniformLocation(glProg,'u_focal'),camera.zoom);bindAndDraw(glStatic,glStatic.count);
+ const dyn=mesh();for(const l of links)addLink(dyn,l);
+ for(const n of nodes)if(n.type==='ap'){const t=state.clock*.83;for(let j=0;j<3;j++){const r=.3+((t+j/3)%1)*1.45;ring(dyn,add(n.p,[0,.93,0]),r,color.purple,.17)}}
+ if(state.selected>=0){const n=nodes[state.selected];ring(dyn,add(n.p,[0,.13,0]),.72,color.white,.8);ring(dyn,add(n.p,[0,.13,0]),.79,n.c,.65)}
+ if(state.traffic){for(const l of links){if(!l.up)continue;for(let k=0;k<2;k++){let t=(state.clock*.18*state.speed+(l.id*.177)+(k*.50))%1;const a=add(linkPoint(nodes[l.a]),[0,l.wireless?.37:.12,0]),b=add(linkPoint(nodes[l.b]),[0,l.wireless?.37:.12,0]);ball(dyn,mix(a,b,t),.076,l.wireless?color.purple:color.green,1)}}}
+ if(state.ping){for(let i=0;i<state.ping.path.length-1;i++){const a=state.ping.path[i],b=state.ping.path[i+1],start=add(linkPoint(nodes[a]),[0,.65,0]),end=add(linkPoint(nodes[b]),[0,.65,0]);rod(dyn,start,end,.048,color.orange,.85)}let elapsed=(state.clock-state.ping.start)*state.speed*1.2,seg=Math.floor(elapsed),t=elapsed-seg;if(seg<state.ping.path.length-1){const from=state.ping.path[seg],to=state.ping.path[seg+1],a=add(linkPoint(nodes[from]),[0,.65,0]),b=add(linkPoint(nodes[to]),[0,.65,0]);ball(dyn,mix(a,b,t),.19,color.orange,1.4)}else if(!state.ping.reported){state.ping.reported=true;state.packets+=4;setConsole('Resposta visual recebida de '+nodes[state.ping.path.at(-1)].id+' · caminho com '+(state.ping.path.length-1)+' salto(s).');toast('✓ Entrega visual concluída');}if(seg>state.ping.path.length+1)state.ping=null}
+ glDynamic.count=upload(dyn,glDynamic);bindAndDraw(glDynamic,glDynamic.count);
+ if(xrView)renderXRLabels(xrView);
+}
+function drawFallback(){const q=ctx;let p;for(let z=-5;z<=5;z++){const a=project(P(-8,0,z)),b=project(P(8,0,z));if(a&&b){q.strokeStyle='#174e65';q.beginPath();q.moveTo(a.x,a.y);q.lineTo(b.x,b.y);q.stroke()}}for(const l of links){const a=project(add(nodes[l.a].p,[0,.28,0])),b=project(add(nodes[l.b].p,[0,.28,0]));if(!a||!b)continue;q.strokeStyle=l.up?(l.wireless?'#a084fc':'#35cfff'):'#ff637c';q.lineWidth=2.5;q.setLineDash(l.wireless?[6,5]:[]);q.beginPath();q.moveTo(a.x,a.y);q.lineTo(b.x,b.y);q.stroke();q.setLineDash([])}for(const n of nodes){p=project(add(n.p,[0,.6,0]));if(!p)continue;q.fillStyle=n.c;q.shadowBlur=25;q.shadowColor=n.c;q.fillRect(p.x-20,p.y-14,40,28);q.shadowBlur=0}}
+function capsule(text,x,y,opts={}){const q=ctx;const font=opts.font||'700 11px ui-sans-serif,system-ui,sans-serif';q.font=font;const tw=q.measureText(text).width,pad=opts.pad||10,r=7,bw=tw+2*pad,bh=opts.h||24;q.fillStyle=opts.bg||'rgba(4,17,31,.83)';q.strokeStyle=opts.stroke||'#45738d99';q.lineWidth=1;q.beginPath();q.roundRect(x-bw/2,y-bh/2,bw,bh,r);q.fill();q.stroke();q.fillStyle=opts.color||'#e3f7ff';q.textAlign='center';q.textBaseline='middle';q.fillText(text,x,y+.5);}
+function renderOverlay(clear=true){if(clear)ctx.clearRect(0,0,w,h);const loc=[];for(let i=0;i<nodes.length;i++){const n=nodes[i],p=project(add(n.p,[0,1.55,0])),c=project(add(n.p,[0,.62,0]));if(!p||!c)continue;loc.push({i,x:c.x,y:c.y,r:clamp(c.scale*.88,23,88),depth:c.z});const sel=state.selected===i,hover=state.hover===i;let y=p.y;const safeX=clamp(p.x,70,w-70);
+ if(n.type==='server'||n.type==='phone')y-=6;
+ const topBlocked=(w>680 && i!==state.selected && (safeX<320&&y<275||safeX>w-260&&y<290));if(topBlocked)continue;
+ if(w<680&&i!==state.selected&&i!==state.hover){if(i%2===0)continue}
+ capsule(n.id.toUpperCase(),safeX,y,{font:`${sel?800:700} ${w<680?9:10}px system-ui`,bg:sel?'#1c5069e8':'#071b2ddc',stroke:sel?'#5fffea':hover?'#7bc3ec':'#3b6a88a0',color:sel?'#bffdf5':'#d9edf9',h:sel?26:23});
+ if(n.ip!=='Não indicado'&&(sel||hover||w>960)){ctx.font='10px ui-monospace,monospace';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillStyle='#79ead2';ctx.fillText(n.ip,safeX,y+17)}
+ }
+ state.hits=loc;
+ if(state.failMode){state.linkHits=[];for(const l of links){const pa=project(add(nodes[l.a].p,[0,.3,0])),pb=project(add(nodes[l.b].p,[0,.3,0]));if(!pa||!pb)continue;const mx=(pa.x+pb.x)/2,my=(pa.y+pb.y)/2;state.linkHits.push({id:l.id,x:mx,y:my});capsule(l.up?'✕ LINK '+(l.id+1):'↻ REATIVAR '+(l.id+1),mx,my,{bg:l.up?'#6b223be8':'#12614ee8',stroke:l.up?'#fa607b':'#67ffc9',font:'800 10px system-ui',h:24})}}
+ if(state.ping&&w>680){const a=state.ping.path.map(i=>nodes[i].id).join('  →  ');capsule('PING VISUAL: '+a,w/2,h*.20,{font:'700 10px system-ui',bg:'#132c40e8',stroke:'#d3aa63',color:'#ffe4a6'})}
+}
+function findNode(x,y){const loc=state.hits||[];let best=-1,bestd=Infinity;for(const n of loc){let d=Math.hypot(x-n.x,y-n.y);if(d<n.r*1.4&&d<bestd){best=n.i;bestd=d}}return best}
+function findLink(x,y){let best=-1,dist=Infinity;for(const l of state.linkHits||[]){let d=Math.hypot(x-l.x,y-l.y);if(d<38&&d<dist){best=l.id;dist=d}}return best}
+function route(a,b){let queue=[[a]],seen=new Set([a]);while(queue.length){let path=queue.shift(),last=path.at(-1);if(last===b)return path;for(let l of links){if(!l.up)continue;let next=l.a===last?l.b:l.b===last?l.a:-1;if(next>=0&&!seen.has(next)){seen.add(next);queue.push([...path,next])}}}return null}
+function setConsole(s){$('consoleMessage').innerHTML='<span class="prompt">›</span> '+escapeHTML(s)}
+function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function toast(message,error=false){const n=$('notification');n.textContent=message;n.classList.toggle('error',error);n.classList.add('show');clearTimeout(notifyTimeout);notifyTimeout=setTimeout(()=>n.classList.remove('show'),3000)}
+function inspect(i){state.selected=i;const side=$('detailPanel'),stats=$('stats-panel');if(i<0){side.classList.add('hidden');$('stats-panel')?.classList.remove('shifted');return}const n=nodes[i];side.classList.remove('hidden');$('stats-panel')?.classList.add('shifted');$('deviceEmblem').textContent=n.symbol;$('deviceType').textContent=n.role;$('deviceName').textContent=n.id;$('deviceDescription').textContent=n.description;$('deviceIp').textContent=n.ip;$('deviceLinks').textContent=links.filter(l=>l.a===i||l.b===i).length.toString().padStart(2,'0');const adjacent=links.filter(l=>l.a===i||l.b===i);$('deviceStatus').textContent=adjacent.some(l=>l.up)?'OPERACIONAL':'ISOLADO';document.querySelector('.device-status').style.color=adjacent.some(l=>l.up)?'#83e7b8':'#ff8597';$('portList').innerHTML=adjacent.map(l=>`<div class="port-line"><span>${escapeHTML(l.a===i?l.pa:l.pb)} · ${escapeHTML(nodes[l.a===i?l.b:l.a].id)}</span><small class="${l.up?'':'down'}">${l.up?'UP':'DOWN'}</small></div>`).join('');setConsole('Inspecionando: '+n.id+' · '+n.role)}
+function stats(){const active=links.filter(l=>l.up).length;$('linksMetric').innerHTML=active+' <small>/ 11</small>';$('packetsMetric').textContent=String(state.packets).padStart(3,'0');$('healthMetric').textContent=active===11?'ESTÁVEL':'DEGRADADA';$('healthMetric').className=active===11?'healthy':'alert';$('statusTop').textContent=active+' / 11 conexões ativas';$('consoleState').textContent=active===11?'● AO VIVO':'● ALERTA';$('consoleState').style.color=active===11?'#56e8ae':'#ff829c'}
+function toggleLink(i){let l=links[i];l.up=!l.up;state.ping=null;state.failMode=false;$('failureBtn').classList.remove('danger','active');$('failureBtn').setAttribute('aria-pressed','false');stats();inspect(state.selected);toast('Ligação '+(i+1)+(l.up?' restaurada.':' desligada! Rede recalculada.'),!l.up);setConsole('LINK '+(i+1)+' '+(l.up?'UP':'DOWN')+' · '+nodes[l.a].id+' ↔ '+nodes[l.b].id)}
+function doPing(){const a=Number($('sourceSel').value),b=Number($('targetSel').value);if(a===b){toast('Escolha dispositivos diferentes para o teste.',true);return}let path=route(a,b);if(!path){state.ping=null;toast('Destino inalcançável. Verifique os links desligados.',true);setConsole('ERRO: nenhuma rota visual entre '+nodes[a].id+' e '+nodes[b].id);return}state.ping={path,start:state.clock,reported:false};state.traffic=true;$('trafficBtn').classList.add('active');$('trafficBtn').textContent='⏸';$('trafficBtn').innerHTML='⏸ <span>TRÁFEGO</span>';setConsole('Enviando ping visual: '+nodes[a].id+' → '+nodes[b].id+' | '+(path.length-1)+' salto(s)');toast('Pacote visual enviado · '+(path.length-1)+' salto(s)');}
+function reset(){for(const l of links)l.up=true;Object.assign(state,{yaw:.43,pitch:.72,dist:22,target:P(0,.1,.05),auto:true,traffic:true,failMode:false,selected:1,ping:null,speed:1.2,tour:-1});$('speedRange').value='1.2';$('speedOutput').textContent='1.2×';$('trafficBtn').classList.add('active');$('trafficBtn').innerHTML='⏸ <span>TRÁFEGO</span>';$('cameraBtn').classList.add('active');$('failureBtn').classList.remove('active','danger');$('tourPopup').hidden=true;stats();inspect(1);setConsole('Rede restaurada: todos os equipamentos e links disponíveis.');toast('✓ Laboratório restaurado')}
+const tour=[
+{node:0,title:'01. O Roteador',txt:'O roteador Cisco 1941 recebe e distribui o tráfego de internet para o firewall.'},
+{node:1,title:'02. Proteção com Firewall',txt:'O firewall ASA 5506-X filtra e monitora a comunicação entre o roteador e os dispositivos internos.'},
+{node:2,title:'03. Switch A e Servidor',txt:'O switch da esquerda conecta o servidor 192.168.10.2 e os PCs 192.168.10.11 e 192.168.10.12.'},
+{node:3,title:'04. Switch B e PCs',txt:'O segundo switch distribui a conexão para os PCs 192.168.10.51 e 192.168.10.52.'},
+{node:9,title:'05. Visitantes no Wi-Fi',txt:'O Access Point atende o laptop e o smartphone sem a necessidade de cabos.'},
+{node:1,title:'06. Experimente você!',txt:'Envie um ping visual entre dois equipamentos e ative FALHAS para desligar uma conexão. Tente enviar de novo e observe o resultado.'}
+];
+function tourStage(i){state.tour=i;if(i<0||i>=tour.length){$('tourPopup').hidden=true;state.tour=-1;return}const st=tour[i];$('tourPopup').hidden=false;$('tourStep').textContent=`ETAPA ${i+1} / ${tour.length}`;$('tourTitle').textContent=st.title;$('tourText').textContent=st.txt;$('tourBack').disabled=i===0;$('tourNext').textContent=i===tour.length-1?'CONCLUIR ✓':'PRÓXIMO →';state.auto=false;state.selected=st.node;inspect(st.node);const n=nodes[st.node];state.camFocus={target:add(n.p,[0,.5,0]),dist:11,yaw:i===4?-.7:state.yaw,pitch:.60};}
+function setupUI(){const source=$('sourceSel'),target=$('targetSel');for(let i=0;i<nodes.length;i++){for(let sel of[source,target]){const opt=document.createElement('option');opt.value=i;opt.textContent=nodes[i].id;sel.add(opt)}}source.value='5';target.value='4';$('pingBtn').onclick=doPing;
+ $('trafficBtn').onclick=()=>{state.traffic=!state.traffic;$('trafficBtn').classList.toggle('active',state.traffic);$('trafficBtn').innerHTML=(state.traffic?'⏸':'▶')+' <span>TRÁFEGO</span>';setConsole(state.traffic?'Tráfego visual retomado.':'Tráfego visual pausado.')};
+ $('failureBtn').onclick=()=>{state.failMode=!state.failMode;$('failureBtn').classList.toggle('danger',state.failMode);$('failureBtn').classList.toggle('active',state.failMode);$('failureBtn').setAttribute('aria-pressed',String(state.failMode));toast(state.failMode?'Clique na etiqueta de uma conexão para desligá-la ou restaurá-la.':'Modo falhas encerrado.')};
+ $('cameraBtn').onclick=()=>{state.auto=!state.auto;$('cameraBtn').classList.toggle('active',state.auto);setConsole('Câmera '+(state.auto?'em rotação automática.':'livre para controle manual.'))};
+ $('resetBtn').onclick=reset;$('overviewBtn').onclick=()=>{state.camFocus={target:P(0,.1,0),dist:22,yaw:.43,pitch:.72};state.auto=false;setConsole('Visão geral de toda a rede.')};
+ $('tourBtn').onclick=()=>tourStage(0);$('tourBack').onclick=()=>tourStage(state.tour-1);$('tourNext').onclick=()=>tourStage(state.tour+1);$('tourClose').onclick=()=>tourStage(-1);
+ $('focusBtn').onclick=()=>{if(state.selected>=0){state.camFocus={target:add(nodes[state.selected].p,[0,.5,0]),dist:10,yaw:state.yaw,pitch:.65};state.auto=false}};
+ $('closeDetail').onclick=()=>inspect(-1);$('helpBtn').onclick=()=>{$('helpModal').hidden=false};$('helpClose').onclick=()=>{$('helpModal').hidden=true};$('helpModal').onclick=e=>{if(e.target===$('helpModal'))$('helpModal').hidden=true};$('fullscreenBtn').onclick=()=>{if(!document.fullscreenElement){document.documentElement.requestFullscreen?.()}else document.exitFullscreen?.()};
+ $('speedRange').oninput=e=>{state.speed=Number(e.target.value);$('speedOutput').textContent=state.speed.toFixed(1)+'×'};
+ canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);state.mouseDown={x:e.clientX,y:e.clientY};state.prev={x:e.clientX,y:e.clientY};state.drag=false});
+ canvas.addEventListener('pointermove',e=>{if(!state.mouseDown){state.hover=findNode(e.clientX,e.clientY);canvas.style.cursor=state.hover>=0?'pointer':'grab';return}let dx=e.clientX-state.prev.x,dy=e.clientY-state.prev.y;if(Math.hypot(e.clientX-state.mouseDown.x,e.clientY-state.mouseDown.y)>5)state.drag=true;if(state.drag){state.auto=false;state.camFocus=null;state.yaw+=dx*.008;state.pitch=clamp(state.pitch+dy*.006,.22,1.40);$('cameraBtn').classList.remove('active')}state.prev={x:e.clientX,y:e.clientY}});
+ canvas.addEventListener('pointerup',e=>{if(!state.drag){if(state.failMode){let id=findLink(e.clientX,e.clientY);if(id>=0)toggleLink(id);else toast('Clique na etiqueta de um link para mudar seu estado.')}else{let i=findNode(e.clientX,e.clientY);if(i>=0){inspect(i)}else inspect(-1)}}state.mouseDown=null;state.drag=false});
+ canvas.addEventListener('pointercancel',()=>{state.mouseDown=null;state.drag=false});canvas.addEventListener('wheel',e=>{e.preventDefault();state.camFocus=null;state.dist=clamp(state.dist+Math.sign(e.deltaY)*1.5,8,35)},{passive:false});
+ window.addEventListener('keydown',e=>{if(e.target instanceof HTMLInputElement||e.target instanceof HTMLSelectElement)return;if(e.code==='Space'){e.preventDefault();$('trafficBtn').click()}if(e.code==='KeyR')reset();if(e.code==='KeyT')tourStage(0);if(e.key==='Escape'){$('helpModal').hidden=true;tourStage(-1);inspect(-1)}if(e.code==='ArrowLeft'||e.code==='ArrowRight'){state.auto=false;state.yaw+=(e.code==='ArrowLeft'?.15:-.15)}if(e.code==='ArrowUp'||e.code==='ArrowDown'){state.pitch=clamp(state.pitch+(e.code==='ArrowUp'?-.1:.1),.22,1.40)}});
+ window.addEventListener('resize',resize);inspect(1);stats();}
+
+// ------- IMERSAO: WebXR headset + modo estereoscopico para celular -------
+const xrStage = p => [p[0]*.17,p[1]*.17+1,p[2]*.17-3.45];
+const clipMatrix=(a,b)=>{const o=new Float32Array(16);for(let col=0;col<4;col++)for(let row=0;row<4;row++){let v=0;for(let k=0;k<4;k++)v+=a[k*4+row]*b[col*4+k];o[col*4+row]=v}return o};
+let xrLabels=[],xrLabelProgram=null,xrLabelBuffer=null,xrInfoTexture=null,xrInfoSignature='',xrMenuTextures=[];
+const xrMenu=[{label:'INICIAR TOUR',x:-1.02,action:()=>tourStage(0)},{label:'PING VISUAL',x:-.34,action:()=>doPing()},{label:'FALHA DEMO',x:.34,action:()=>toggleLink(2)},{label:'RESTAURAR',x:1.02,action:()=>reset()}];
+function makeXRTexture(lines,wTex=768,hTex=170,kind='label'){
+ const c=document.createElement('canvas');c.width=wTex;c.height=hTex;const g=c.getContext('2d');
+ g.fillStyle=kind==='info'?'rgba(3,18,34,.92)':'rgba(5,26,44,.88)';g.fillRect(4,4,wTex-8,hTex-8);
+ g.strokeStyle=kind==='info'?'#45e7d6':'#347ba4';g.lineWidth=7;g.strokeRect(5,5,wTex-10,hTex-10);
+ lines.forEach((line,i)=>{let text=String(line);const size=kind==='info'?(i===0?50:31):(i===0?52:30);g.font=`700 ${size}px system-ui, sans-serif`;g.fillStyle=i===0?'#edfbff':'#68e7dc';g.textBaseline='middle';g.textAlign='center';while(g.measureText(text).width>wTex-48&&text.length>5)text=text.slice(0,-2)+'…';g.fillText(text,wTex/2,kind==='info'?80+i*66:65+i*61)});
+ const tx=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tx);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,c);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);return tx;
+}
+function setupXRLabels(){if(xrLabelProgram||!gl)return;
+ const vs='attribute vec3 a_pos;attribute vec2 a_uv;uniform mat4 u_vp;varying vec2 v_uv;void main(){v_uv=a_uv;gl_Position=u_vp*vec4(a_pos,1.0);}';
+ const fs='precision mediump float;varying vec2 v_uv;uniform sampler2D u_texture;void main(){gl_FragColor=texture2D(u_texture,v_uv);}';
+ const mk=(t,s)=>{const q=gl.createShader(t);gl.shaderSource(q,s);gl.compileShader(q);if(!gl.getShaderParameter(q,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(q));return q};
+ xrLabelProgram=gl.createProgram();gl.attachShader(xrLabelProgram,mk(gl.VERTEX_SHADER,vs));gl.attachShader(xrLabelProgram,mk(gl.FRAGMENT_SHADER,fs));gl.linkProgram(xrLabelProgram);if(!gl.getProgramParameter(xrLabelProgram,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(xrLabelProgram));
+ xrLabelBuffer=gl.createBuffer();xrLabels=nodes.map(n=>makeXRTexture([n.id,n.ip==='Não indicado'?n.role:n.ip]));
+ xrInfoTexture=makeXRTexture(['REDE CISCO 3D','Aponte e use o gatilho'],768,216,'info');xrMenuTextures=xrMenu.map(m=>makeXRTexture([m.label],560,145));
+}
+function writeXRInfo(){const n=nodes[state.selected]||nodes[1];let lines;
+ if(state.tour>=0){const st=tour[state.tour];lines=[`${state.tour+1}/${tour.length}  ${st.title}`,st.txt]}
+ else lines=[n.id, `${n.ip==='Não indicado'?n.role:n.ip}  •  Gatilho para interagir`];
+ const signature=lines.join('|');if(signature===xrInfoSignature)return;xrInfoSignature=signature;
+ if(xrInfoTexture)gl.deleteTexture(xrInfoTexture);xrInfoTexture=makeXRTexture(lines,1024,208,'info');
+}
+function xrBillboard(xrView, texture, center, width, height){
+ const m=xrView.pose.transform.matrix, right=[m[0],m[1],m[2]],up=[m[4],m[5],m[6]];
+ const a=add(add(center,scale(right,-width/2)),scale(up,-height/2)),b=add(add(center,scale(right,width/2)),scale(up,-height/2)),c=add(add(center,scale(right,width/2)),scale(up,height/2)),d=add(add(center,scale(right,-width/2)),scale(up,height/2));
+ const v=new Float32Array([...a,0,1,...b,1,1,...c,1,0,...a,0,1,...c,1,0,...d,0,0]);
+ gl.bindBuffer(gl.ARRAY_BUFFER,xrLabelBuffer);gl.bufferData(gl.ARRAY_BUFFER,v,gl.STREAM_DRAW);
+ gl.vertexAttribPointer(gl.getAttribLocation(xrLabelProgram,'a_pos'),3,gl.FLOAT,false,20,0);gl.vertexAttribPointer(gl.getAttribLocation(xrLabelProgram,'a_uv'),2,gl.FLOAT,false,20,12);
+ gl.bindTexture(gl.TEXTURE_2D,texture);gl.drawArrays(gl.TRIANGLES,0,6);
+}
+function renderXRLabels(xrView){setupXRLabels();writeXRInfo();gl.useProgram(xrLabelProgram);gl.uniformMatrix4fv(gl.getUniformLocation(xrLabelProgram,'u_vp'),false,xrView.vp);gl.activeTexture(gl.TEXTURE0);gl.uniform1i(gl.getUniformLocation(xrLabelProgram,'u_texture'),0);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+ const a=gl.getAttribLocation(xrLabelProgram,'a_pos'),b=gl.getAttribLocation(xrLabelProgram,'a_uv');gl.enableVertexAttribArray(a);gl.enableVertexAttribArray(b);
+ for(let i=0;i<nodes.length;i++){const n=nodes[i],p=xrStage(add(n.p,[0,1.62,0]));xrBillboard(xrView,xrLabels[i],p,i===state.selected?.46:.38,i===state.selected?.13:.105)}
+ xrBillboard(xrView,xrInfoTexture,[0,2.08,-3.50],1.95,.38);
+ for(let i=0;i<xrMenu.length;i++)xrBillboard(xrView,xrMenuTextures[i],[xrMenu[i].x,.53,-2.35],.63,.17);
+ // Menu de navegacao no proprio ambiente, visivel nos dois olhos.
+ gl.depthMask(true);gl.disable(gl.BLEND);gl.enable(gl.DEPTH_TEST);gl.useProgram(glProg);
+}
+function xrRayHit(matrix){const start=[matrix[12],matrix[13],matrix[14]],dir=norm([-matrix[8],-matrix[9],-matrix[10]]);let best=-1,dist=1e9;
+ for(let i=0;i<nodes.length;i++){const n=nodes[i],p=xrStage(add(n.p,[0,.65,0])),rel=sub(p,start),t=dot(rel,dir);if(t<.4||t>12)continue;const miss=len(sub(rel,scale(dir,t)));if(miss<.28&&t<dist){best=i;dist=t}}
+ return best;
+}
+function xrMenuHit(matrix){const origin=[matrix[12],matrix[13],matrix[14]],dir=norm([-matrix[8],-matrix[9],-matrix[10]]),z=-2.35,t=(z-origin[2])/dir[2];if(!Number.isFinite(t)||t<=0)return -1;const hit=add(origin,scale(dir,t));if(Math.abs(hit[1]-.53)>.14)return -1;return xrMenu.findIndex(m=>Math.abs(hit[0]-m.x)<.32)}
+function xrSelect(e){if(!state.xrSession)return;let i=-1;let matrix=null;
+ if(e?.frame&&e?.inputSource?.targetRaySpace){const pose=e.frame.getPose(e.inputSource.targetRaySpace,state.xrRef);if(pose)matrix=pose.transform.matrix}
+ matrix ||= state.xrHeadMatrix;
+ if(matrix){const mi=xrMenuHit(matrix);if(mi>=0){xrMenu[mi].action();xrInfoSignature='';return}i=xrRayHit(matrix)}
+ if(i<0)i=state.xrHover;
+ if(i>=0){inspect(i);xrInfoSignature='';}else if(state.tour>=0){tourStage(state.tour+1);xrInfoSignature='';}else{tourStage(0);xrInfoSignature='';}
+}
+function advance(dt){state.clock+=dt*(state.traffic?1:0);if(!state.xrSession&&state.auto&&!state.mouseDown&&!state.stereo)state.yaw+=dt*.095;if(!state.xrSession&&state.camFocus){const f=state.camFocus,t=.07;state.target=mix(state.target,f.target,t);state.dist+=(f.dist-state.dist)*t;state.yaw+=(f.yaw-state.yaw)*t;state.pitch+=(f.pitch-state.pitch)*t;if(len(sub(state.target,f.target))<.03)state.camFocus=null}
+ drawCount++;if(drawCount%24===0){state.packets+=state.traffic?Math.max(1,Math.floor(links.filter(l=>l.up).length*state.speed/4)):0;stats();const bars=$('sparkline').children;for(let i=0;i<bars.length;i++)bars[i].style.height=(20+Math.random()*78)+'%'}}
+function xrFrame(ms,frame){if(!state.xrSession)return;const dt=clamp((ms-state.xrLast)/1000||.016,0,.05);state.xrLast=ms;advance(dt);
+ const pose=frame.getViewerPose(state.xrRef);if(pose){state.xrHeadMatrix=pose.transform.matrix;state.xrHover=xrRayHit(pose.transform.matrix);gl.bindFramebuffer(gl.FRAMEBUFFER,state.xrBase.framebuffer);gl.enable(gl.SCISSOR_TEST);
+ for(const view of pose.views){const viewport=state.xrBase.getViewport(view);gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
+ const vp=clipMatrix(view.projectionMatrix,view.transform.inverse.matrix);render3d({vp,pose:view,eye:view.eye});}
+ gl.disable(gl.SCISSOR_TEST);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+ }state.xrSession?.requestAnimationFrame(xrFrame);
+}
+async function enterXR(){if(!navigator.xr){toast('WebXR não disponível neste navegador. Use o modo lado a lado.',true);return}
+ try{if(!gl)throw Error('É necessário WebGL para VR');
+ // Pedir a sessão diretamente no clique preserva a ativação exigida pelo navegador.
+ const session=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor']});
+ state.xrSession=session;
+ // O contexto WebGL deve ser compatível com o compositor XR.
+ if(gl.makeXRCompatible)await gl.makeXRCompatible();
+ state.auto=false;state.stereo=false;document.body.classList.remove('stereo-mode');state.xrLast=0;
+ const layer=new XRWebGLLayer(session,gl,{alpha:false,antialias:true,depth:true});state.xrBase=layer;session.updateRenderState({baseLayer:layer,depthNear:0.05,depthFar:80});
+ try{state.xrRef=await session.requestReferenceSpace('local-floor')}catch{state.xrRef=await session.requestReferenceSpace('local')}
+ session.addEventListener('select',xrSelect);session.addEventListener('end',()=>{state.xrSession=null;state.xrRef=null;state.xrBase=null;xrInfoSignature='';document.body.classList.remove('xr-active');resize();toast('Modo VR encerrado.');});
+ document.body.classList.add('xr-active');setupXRLabels();xrInfoSignature='';session.requestAnimationFrame(xrFrame);
+ }catch(e){console.warn('Falha na sessão WebXR',e);toast('Não foi possível entrar em VR: '+(e.message||e),true);if(state.xrSession)try{await state.xrSession.end()}catch{}}
+}
+function stereoCamera(eye){const c=cameraMatrix();c.aspect=(w/2)/h;c.zoom=1.45;c.eye=add(c.eye,scale(c.r,eye*.19));return c}
+function stereoOverlay(){const fullW=w,baseCamera=camera,half=w/2;const hit=[];ctx.save();for(let eye=0;eye<2;eye++){
+ ctx.save();ctx.beginPath();ctx.rect(eye*half,0,half,h);ctx.clip();ctx.translate(eye*half,0);w=half;camera=stereoCamera(eye?1:-1);renderOverlay(!!gl);hit.push(...(state.hits||[]).map(n=>({...n,x:n.x+eye*half})));
+ ctx.strokeStyle='#bafcf1';ctx.lineWidth=2;ctx.beginPath();ctx.arc(half/2,h/2,9,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(half/2-18,h/2);ctx.lineTo(half/2-12,h/2);ctx.moveTo(half/2+12,h/2);ctx.lineTo(half/2+18,h/2);ctx.stroke();
+ const name=nodes[state.stereoHover]?.id||'OLHE PARA UM EQUIPAMENTO';capsule(name.toUpperCase(),half/2,h*.87,{bg:'#061b2cf2',color:'#a4f5e7',h:29,font:'bold 13px system-ui'});
+ ctx.restore();}
+ ctx.restore();w=fullW;camera=baseCamera;state.hits=hit;
+}
+function renderStereo(){if(!gl){const fullW=w,half=w/2,orig=camera;ctx.clearRect(0,0,w,h);for(let eye=0;eye<2;eye++){ctx.save();ctx.beginPath();ctx.rect(eye*half,0,half,h);ctx.clip();ctx.translate(eye*half,0);w=half;camera=stereoCamera(eye?1:-1);drawFallback();ctx.restore()}w=fullW;camera=orig;stereoOverlay();return}const original=camera;gl.enable(gl.SCISSOR_TEST);for(let i=0;i<2;i++){
+ const eyeCamera=stereoCamera(i?1:-1);camera=eyeCamera;const x=Math.round(canvas.width*i/2),cw=Math.round(canvas.width/2);gl.viewport(x,0,cw,canvas.height);gl.scissor(x,0,cw,canvas.height);render3d();}
+ gl.disable(gl.SCISSOR_TEST);gl.viewport(0,0,canvas.width,canvas.height);camera=original;stereoOverlay();
+ // Apontamento pelo centro da imagem; 1,4s de fixacao seleciona o equipamento.
+ const c=stereoCamera(0);let hit=-1,dist=1e9;for(let i=0;i<nodes.length;i++){const p=projectWithCamera(add(nodes[i].p,[0,.75,0]),c,w/2,h);if(!p)continue;const d=Math.hypot(p.x-w/4,p.y-h/2);if(d<30&&d<dist){dist=d;hit=i}}
+ if(hit!==state.stereoHover){state.stereoHover=hit;state.stereoFocusAt=performance.now()}
+ else if(hit>=0&&state.selected!==hit&&performance.now()-state.stereoFocusAt>1500){inspect(hit);state.stereoFocusAt=performance.now()+2500}
+}
+function projectWithCamera(p,c,vw,vh){const rel=sub(p,c.eye),z=dot(rel,c.f);if(z<.15)return null;const f=vh*.5*c.zoom;return{x:vw/2+dot(rel,c.r)*f/z,y:vh/2-dot(rel,c.u)*f/z,z}}
+function stereoMode(enable){if(state.xrSession)return;state.stereo=enable;state.auto=false;state.camFocus=null;state.yaw=0;state.pitch=.42;state.dist=19;state.target=P(0,.25,0);document.body.classList.toggle('stereo-mode',enable);
+ $('stereoBtn').textContent=enable?'⏹ Sair do 3D lado a lado':'◫ 3D lado a lado';$('exitStereoBtn').hidden=!enable;
+ if(enable){toast('Modo de óculos de celular: tela dividida ativada.');try{Promise.resolve(document.documentElement.requestFullscreen?.()).then(()=>screen.orientation?.lock?.('landscape')?.catch?.(()=>{})).catch(()=>{})}catch{}}
+ else {if(document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});toast('Visão normal restaurada.');}}
+function askGyro(){if(!state.stereo){toast('Ative primeiro o modo 3D lado a lado.');return}
+ const start=()=>{state.gyro=true;state.gyroOrigin=null;window.addEventListener('deviceorientation',applyGyro);$('gyroBtn').textContent='⟳ Recalibrar olhar';toast('Movimente a cabeça para olhar em volta.');};
+ if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function')DeviceOrientationEvent.requestPermission().then(ok=>ok==='granted'?start():toast('Sensor de movimento não autorizado.',true)).catch(e=>toast(String(e),true));else start();}
+function applyGyro(ev){if(!state.stereo||!state.gyro||ev.alpha==null||ev.beta==null)return;
+ const origin=state.gyroOrigin||(state.gyroOrigin={alpha:ev.alpha,beta:ev.beta,gamma:ev.gamma||0});const wrap=v=>((v+540)%360)-180;
+ // Visão relativa calibrada: suficiente para cartão VR; depende da orientação do aparelho.
+ state.yaw=clamp(-wrap(ev.alpha-origin.alpha)*Math.PI/180,-Math.PI,Math.PI);
+ state.pitch=clamp(.42+(ev.beta-origin.beta)*Math.PI/180,-.65,1.45);
+}
+async function testXRSupport(){const msg=$('xrSupport');if(!window.isSecureContext){msg.textContent='VR imersivo requer HTTPS (ou localhost).';return}if(!navigator.xr?.isSessionSupported){msg.textContent='WebXR indisponível aqui; modo de celular continua disponível.';return}
+ try{const ok=await navigator.xr.isSessionSupported('immersive-vr');msg.textContent=ok?'WebXR disponível: pronto para tentar entrar no headset.':'WebXR não detectado neste dispositivo; use o modo lado a lado.';$('xrBtn').disabled=!ok}catch{msg.textContent='Não foi possível verificar o suporte WebXR.'}}
+function setupVRUI(){ $('xrBtn').onclick=enterXR;$('stereoBtn').onclick=()=>stereoMode(!state.stereo);$('exitStereoBtn').onclick=()=>stereoMode(false);$('gyroBtn').onclick=()=>{if(state.gyro){state.gyroOrigin=null;toast('Olhar recalibrado: mantenha a cabeça em posição neutra.')}else askGyro()};
+ $('stereoNextBtn').onclick=()=>{if(state.tour<0)tourStage(0);else tourStage((state.tour+1)%tour.length)};
+ $('stereoResetBtn').onclick=()=>{state.yaw=0;state.pitch=.42;state.gyroOrigin=null;toast('Câmera centralizada.')};
+ window.addEventListener('keydown',e=>{if(e.key==='Escape'&&state.stereo)stereoMode(false)});
+ testXRSupport();}
+
+function frame(ms){const dt=clamp((ms-lastFrame)/1000||.016,0,.05);lastFrame=ms;if(!state.xrSession){advance(dt);camera=cameraMatrix();if(state.stereo)renderStereo();else{if(gl){gl.viewport(0,0,canvas.width,canvas.height);render3d()}else{ctx.clearRect(0,0,w,h);drawFallback()}renderOverlay(!!gl);}}requestAnimationFrame(frame)}
+// Startup. The fallback still allows interaction on devices with WebGL disabled.
+resize();initWebGL();resize();setupUI();setupVRUI();if(!gl)toast('WebGL indisponível: modo de desenho alternativo ativado.',true);requestAnimationFrame(frame);
+})();
